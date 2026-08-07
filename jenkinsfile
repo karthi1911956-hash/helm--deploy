@@ -1,0 +1,123 @@
+pipeline {
+
+    agent any
+
+    environment {
+
+        AWS_REGION = "ap-south-1"
+
+        CLUSTER_NAME = "my-eks-cluster"
+
+        ECR_REPO = "845955035575.dkr.ecr.ap-south-1.amazonaws.com/myapp"
+
+        IMAGE_NAME = "myapp"
+
+        IMAGE_TAG = "${BUILD_NUMBER}"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git branch: 'main',
+                url: 'https://github.com/karthi1911956-hash/helm--deploy.git'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh '''
+                docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+                '''
+            }
+        }
+
+        stage('Login to Amazon ECR') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
+
+                    sh '''
+                    aws ecr get-login-password \
+                    --region ${AWS_REGION} | docker login \
+                    --username AWS \
+                    --password-stdin ${ECR_REPO}
+                    '''
+                }
+            }
+        }
+
+        stage('Tag Docker Image') {
+            steps {
+
+                sh '''
+                docker tag ${IMAGE_NAME}:${IMAGE_TAG} \
+                ${ECR_REPO}:${IMAGE_TAG}
+                '''
+            }
+        }
+
+        stage('Push Docker Image') {
+            steps {
+
+                sh '''
+                docker push ${ECR_REPO}:${IMAGE_TAG}
+                '''
+            }
+        }
+
+        stage('Update kubeconfig') {
+            steps {
+
+                sh '''
+                aws eks update-kubeconfig \
+                --region ${AWS_REGION} \
+                --name ${CLUSTER_NAME}
+                '''
+            }
+        }
+
+        stage('Deploy using Helm') {
+
+            steps {
+
+                sh '''
+                helm upgrade --install myapp ./helm \
+                --set image.repository=${ECR_REPO} \
+                --set image.tag=${IMAGE_TAG}
+                '''
+            }
+        }
+
+        stage('Verify Deployment') {
+
+            steps {
+
+                sh '''
+                kubectl get pods
+                helm list
+                '''
+            }
+        }
+
+    }
+
+    post {
+
+        success {
+
+            echo "Deployment Successful"
+
+        }
+
+        failure {
+
+            echo "Deployment Failed"
+
+        }
+
+    }
+
+}
